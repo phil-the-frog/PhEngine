@@ -35,7 +35,8 @@ def main():
         elif uciIn.startswith('position'):
             iPosition(uciIn[9:])        # 9 to skip the 'position'
         elif uciIn.startswith('go'):
-            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn[3:],)).start()
+            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn[3:],))
+            goThread.start()
         elif uciIn == 'stop':
             stopThread()
         elif uciIn == 'quit':
@@ -57,7 +58,7 @@ def iIsReady():
     global goThread
     global board
     goThread = threading.Thread(target=iGo, name='Thread-1')    # the thread on which the 'go' command will run
-    board.turn = chess.BLACK
+    board.turn = chess.BLACK        # unknown if arena likes this
     print('readyok')
 
 def iNewGame():
@@ -74,13 +75,9 @@ def iPosition(inStr):
                 board.push_uci(move)
     elif inStr.startswith('fen'):
         board.set_fen(inStr.partition('fen ')[2])  # use the fen string at the end to build a new board
-# go through the board and check to see if that square as a moveTable entry if it doesn't generate one for it
-# the moveTable is like this square -> list of moves possible for that piece on that square
     
-#def generateMoves(piece):
-
 # ignoring inStr right now
-def iGo():
+def iGo(inStr):
     startTime = datetime.now()
 # go through the board and check to see if that square as a moveTable entry if it doesn't generate one for it
 # the moveTable is like this square -> list of moves possible for that piece on that square
@@ -90,7 +87,7 @@ def iGo():
     global threadFlag
     while not threadFlag:
         bestMove = moves[random.randint(0,total-1)].uci()
-        print('info depth {} score cp {} time {}'.format(i,evalFunction(),datetime.now()-startTime))
+        print('info depth {} score cp {} time {}'.format(i,evalFunction(board),datetime.now()-startTime))
         i += 1
     threadFlag = False      # reset the thread flag
     print ('bestmove {}'.format(bestMove))  # print out the best move
