@@ -80,18 +80,22 @@ def iPosition(inStr):
         board.set_fen(inStr.partition('fen ')[2])  # use the fen string at the end to build a new board
     color = board.turn
     
+
 startTime = 0
 nodes = 0
-def maxi(currDepth,depth, alpha, beta):
+def maxi(depth, alpha, beta, pv):
     global board
     global startTime
     global nodes
-    if currDepth >= depth or threadFlag == True: return evalFunction()
+    if depth == 0: 
+        if nodes % 10000 == 0:
+            print('info depth {} score cp {} pv {}'.format(depth, alpha,pv))
+        return evalFunction()
     for move in list(board.generate_legal_moves()):
         nodes += 1
-        print('info depth {} nodes {} score cp {} time {}'.format(currDepth,nodes,evalFunction(),datetime.now()-startTime))
+        ##print('info depth {} nodes {} score cp {} time {}'.format(depth,nodes,evalFunction(),datetime.now()-startTime))
         board.push(move)
-        score = mini(currDepth+1,depth, alpha, beta)
+        score = mini(depth - 1, alpha, beta, pv+' '+move.uci())
         board.pop()
         if score >= beta:
             return beta
@@ -99,16 +103,19 @@ def maxi(currDepth,depth, alpha, beta):
             alpha = score
     return alpha
 
-def mini(currDepth, depth, alpha, beta):
+def mini(depth, alpha, beta, pv):
     global board
     global startTime
     global nodes
-    if currDepth >= depth or threadFlag == True: return -evalFunction()
+    if depth == 0: 
+        if nodes % 10000 == 0:
+            print('info depth {} score cp {} pv {}'.format(depth, alpha,pv))
+        return -evalFunction()
+    #print('info depth {}'.format(depth))
     for move in list(board.generate_legal_moves()):
         nodes += 1
         board.push(move)
-        #print('info depth {} nodes {} score cp {} time {} color {}'.format(depth,nodes,evalFunction(board),datetime.now()-startTime,board.turn))
-        score = maxi(currDepth+1,depth, alpha, beta)
+        score = maxi(depth - 1, alpha, beta, pv+' '+move.uci())
         board.pop()
         if score <= alpha:
             return alpha
@@ -118,31 +125,38 @@ def mini(currDepth, depth, alpha, beta):
 
 # ignoring inStr right now
 def iGo(inStr):
-    depth = 3
+    depth = 4
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
     if 'depth' in inStr:
         depth = int(inStr[inStr.index('depth')+1])
     global startTime
-    global threadFlag
     global bestMove
     global nodes
+    global threadFlag
     startTime = datetime.now()
     # go through the board and check to see if that square as a moveTable entry if it doesn't generate one for it
     # the moveTable is like this square -> list of moves possible for that piece on that square
     nodes = 0
     #iPrint()
-    rootList = []
+    i = 0
+    val = -99999
     for move in list(board.generate_legal_moves()):
-        rootList.append((move,maxi(0,depth-1,-9999999,9999999)))
-    bestMove = max(rootList,key=itemgetter(1))[0].uci()
+        if threadFlag == True: break
+        print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
+        board.push(move)
+        newVal = maxi(depth, -99999, 99999, move.uci())
+        if val <= newVal:
+            bestMove = move.uci()
+            val = newVal
+        board.pop()
+        i+=1
     #iPrint()
-    threadFlag = False      # reset the thread flag
     print ('bestmove {}'.format(bestMove))  # print out the best move
         
 def stopThread():
     global threadFlag
-    global goThread
     threadFlag = True
+    global goThread
     goThread.join()
 
 pawnTable = [0,  0,  0,  0,  0,  0,  0,  0,
@@ -220,7 +234,7 @@ def evalFunction():
     scoreForPawn = 100 * (board.pieces(chess.PAWN,color).__len__() - board.pieces(chess.PAWN,not color).__len__())
     pieceMap = board.piece_map()
     for square,piece in pieceMap.items():
-        if piece.color == color:
+        if piece is not None and piece.color == color:
             if color == chess.BLACK:
                 mfile = chess.square_file(square)
                 mrank = chess.square_rank(square)
