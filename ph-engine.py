@@ -9,6 +9,7 @@ This is a simple chess engine that uses the Universal Chess Interface (UCI) prot
 import chess
 import random
 import threading
+from multiprocessing import Pool
 from datetime import datetime
 from operator import itemgetter
 
@@ -20,6 +21,7 @@ moveTable = dict()          # a hash table to store the moves for each square to
 threadFlag = False          # a flag to tell the thread when to stop running
 bestMove = ''               # the current best move found, stored in uci format
 color = False                # False for black, True for white
+p = None
 
 def main():
     global goThread
@@ -80,43 +82,37 @@ def iPosition(inStr):
         board.set_fen(inStr.partition('fen ')[2])  # use the fen string at the end to build a new board
     color = board.turn
     
+# tuple is (move.uci(),board,depth)
+def threadWrapper(mTuple):
+    move = mTuple[0]
+    mTuple[1].push_uci(move)
+    value = mini(mTuple[2],-99999,99999,'',mTuple[1].copy())
+    mTuple[1].pop()
+    return (move,value)
 
-startTime = 0
-nodes = 0
-def maxi(depth, alpha, beta, pv):
-    global board
-    global startTime
-    global nodes
+def maxi(depth, alpha, beta, pv, mBoard):
     if depth == 0: 
-        if nodes % 10000 == 0:
-            print('info depth {} score cp {} pv {}'.format(depth, alpha,pv))
-        return evalFunction()
-    for move in list(board.generate_legal_moves()):
-        nodes += 1
+        #print('info depth {} score cp {} pv {}'.format(depth, alpha, pv))
+        return evalFunction(mBoard)
+    for move in list(mBoard.generate_legal_moves()):
         ##print('info depth {} nodes {} score cp {} time {}'.format(depth,nodes,evalFunction(),datetime.now()-startTime))
-        board.push(move)
-        score = mini(depth - 1, alpha, beta, pv+' '+move.uci())
-        board.pop()
+        mBoard.push(move)
+        score = mini(depth - 1, alpha, beta, pv+' '+move.uci(), mBoard)
+        mBoard.pop()
         if score >= beta:
             return beta
         if score > alpha:
             alpha = score
     return alpha
 
-def mini(depth, alpha, beta, pv):
-    global board
-    global startTime
-    global nodes
+def mini(depth, alpha, beta, pv, mBoard):
     if depth == 0: 
-        if nodes % 10000 == 0:
-            print('info depth {} score cp {} pv {}'.format(depth, alpha,pv))
-        return -evalFunction()
+        return -evalFunction(mBoard)
     #print('info depth {}'.format(depth))
-    for move in list(board.generate_legal_moves()):
-        nodes += 1
-        board.push(move)
-        score = maxi(depth - 1, alpha, beta, pv+' '+move.uci())
-        board.pop()
+    for move in list(mBoard.generate_legal_moves()):
+        mBoard.push(move)
+        score = maxi(depth - 1, alpha, beta, pv+' '+move.uci(), mBoard)
+        mBoard.pop()
         if score <= alpha:
             return alpha
         if score < beta:
@@ -129,6 +125,8 @@ def iGo(inStr):
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
     if 'depth' in inStr:
         depth = int(inStr[inStr.index('depth')+1])
+    global p
+    p = Pool(8)                 # pool that will do the heavy lifting of processing
     global startTime
     global bestMove
     global nodes
@@ -138,24 +136,18 @@ def iGo(inStr):
     # the moveTable is like this square -> list of moves possible for that piece on that square
     nodes = 0
     #iPrint()
-    i = 0
-    val = -99999
-    for move in list(board.generate_legal_moves()):
-        if threadFlag == True: break
-        print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
-        board.push(move)
-        newVal = maxi(depth, -99999, 99999, move.uci())
-        if val <= newVal:
-            bestMove = move.uci()
-            val = newVal
-        board.pop()
-        i+=1
+    inputToMap = [(move.uci(),board,depth) for move in list(board.generate_legal_moves())]
+    #print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
+    newVals = p.map(threadWrapper, inputToMap)
+    bestMove = max(newVals,key=itemgetter(1))[0]
+    p.close()
+    print('info time {}'.format(datetime.now()-startTime))
     #iPrint()
     print ('bestmove {}'.format(bestMove))  # print out the best move
         
 def stopThread():
-    global threadFlag
-    threadFlag = True
+    #global p
+    #p.terminate()
     global goThread
     goThread.join()
 
@@ -222,20 +214,19 @@ kingEndGameTable = [-50,-40,-30,-20,-20,-30,-40,-50,
 -30,-30,  0,  0,  0,  0,-30,-30,
 -50,-30,-30,-30,-30,-30,-30,-50]
 
-def evalFunction():
-    global color
-    global board
-    scoreForKings = 20000 * (board.pieces(chess.KING,color).__len__() - board.pieces(chess.KING,not color).__len__())
-    scoreForQueens = 900* (board.pieces(chess.QUEEN,color).__len__() - board.pieces(chess.QUEEN,not color).__len__())
-    scoreForRook = 500 * (board.pieces(chess.ROOK,color).__len__() - board.pieces(chess.ROOK,not color).__len__())
-    scoreForBishopKnight = (board.pieces(chess.BISHOP,color).__len__()-board.pieces(chess.BISHOP,not color).__len__())
-    scoreForBishopKnight += (board.pieces(chess.KNIGHT,color).__len__()-board.pieces(chess.KNIGHT,not color).__len__())
+def evalFunction(mBoard):
+    color = mBoard.turn
+    scoreForKings = 20000 * (mBoard.pieces(chess.KING,color).__len__() - mBoard.pieces(chess.KING,not color).__len__())
+    scoreForQueens = 900* (mBoard.pieces(chess.QUEEN,color).__len__() - mBoard.pieces(chess.QUEEN,not color).__len__())
+    scoreForRook = 500 * (mBoard.pieces(chess.ROOK,color).__len__() - mBoard.pieces(chess.ROOK,not color).__len__())
+    scoreForBishopKnight = (mBoard.pieces(chess.BISHOP,color).__len__()-mBoard.pieces(chess.BISHOP,not color).__len__())
+    scoreForBishopKnight += (mBoard.pieces(chess.KNIGHT,color).__len__()-mBoard.pieces(chess.KNIGHT,not color).__len__())
     scoreForBishopKnight *= 330
-    scoreForPawn = 100 * (board.pieces(chess.PAWN,color).__len__() - board.pieces(chess.PAWN,not color).__len__())
-    pieceMap = board.piece_map()
+    scoreForPawn = 100 * (mBoard.pieces(chess.PAWN,color).__len__() - mBoard.pieces(chess.PAWN,not color).__len__())
+    pieceMap = mBoard.piece_map()
     for square,piece in pieceMap.items():
         if piece is not None and piece.color == color:
-            if color == chess.BLACK:
+            if color == chess.WHITE:
                 mfile = chess.square_file(square)
                 mrank = chess.square_rank(square)
                 mrank = 7 - mrank
