@@ -10,7 +10,6 @@ import chess
 import random
 import threading
 from datetime import datetime
-from operator import itemgetter
 
 board = chess.Board()       # internal state of the board
 author = 'Phillip Sopt'
@@ -19,7 +18,6 @@ goThread = None             # the thread on which the 'go' command will run
 moveTable = dict()          # a hash table to store the moves for each square to avoid recalculating the moves
 threadFlag = False          # a flag to tell the thread when to stop running
 bestMove = ''               # the current best move found, stored in uci format
-color = False                # False for black, True for white
 
 def main():
     global goThread
@@ -37,7 +35,7 @@ def main():
         elif uciIn.startswith('position'):
             iPosition(uciIn[9:])        # 9 to skip the 'position'
         elif uciIn.startswith('go'):
-            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))
+            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))   # set up the go thread and let it run
             goThread.start()
         elif uciIn == 'stop':
             stopThread()
@@ -47,6 +45,7 @@ def main():
         elif uciIn == 'print':
             iPrint()
         
+# prints the author and name of the engine to the GUI
 def iUci():
     print('id name {}'.format(engineName))
     print('id author {}'.format(author))
@@ -57,28 +56,25 @@ def iSetOption(inStr):
     pass
 
 def iIsReady():
-    global goThread
-    #goThread = threading.Thread(target=iGo, name='Thread-1')    # the thread on which the 'go' command will run
+    # no internal hashtables or move transposition tables to set up yet
     print('readyok')
 
 def iNewGame():
     moveTable.clear()
 
 def iPosition(inStr):
-    global color
     global board
     board = chess.Board()
-    if inStr.startswith('startpos'):
+    if inStr.startswith('startpos'):    # if we have to start with the std chess startpos
         board.set_fen(chess.STARTING_FEN)
         #do a while loop till there's no more input
         if 'moves' in inStr:
             inStr = inStr.partition('moves ')[2]    # get the stuff after 'moves '
-            inStr = inStr.split()
+            inStr = inStr.split()                   # turn it into a list and iterate through
             for move in inStr:
-                board.push_uci(move)
+                board.push_uci(move)                # push the move to the board's move stack
     elif inStr.startswith('fen'):
-        board.set_fen(inStr.partition('fen ')[2])  # use the fen string at the end to build a new board
-    color = board.turn
+        board.set_fen(inStr.partition('fen ')[2])   # use the fen string at the end to build a new board
     
 
 startTime = 0
@@ -93,7 +89,6 @@ def maxi(depth, alpha, beta, pv):
         print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
     for move in list(board.generate_legal_moves()):
         nodes += 1
-        ##print('info depth {} nodes {} score cp {} time {}'.format(depth,nodes,evalFunction(),datetime.now()-startTime))
         board.push(move)
         score = mini(depth - 1, alpha, beta, pv+' '+move.uci())
         board.pop()
@@ -109,9 +104,9 @@ def mini(depth, alpha, beta, pv):
     global nodes
     if depth == 0: 
         return -evalFunction(board)
+    # only display info every 10k nodes so the log doesn't get spammed
     if nodes % 10000 == 0:
         print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
-    #print('info depth {}'.format(depth))
     for move in list(board.generate_legal_moves()):
         nodes += 1
         board.push(move)
@@ -125,7 +120,7 @@ def mini(depth, alpha, beta, pv):
 
 # ignoring inStr right now
 def iGo(inStr):
-    depth = 4
+    depth = 4                       # default depth is 4 for now
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
     if 'depth' in inStr:
         depth = int(inStr[inStr.index('depth')+1])
@@ -133,32 +128,33 @@ def iGo(inStr):
     global bestMove
     global nodes
     global threadFlag
-    startTime = datetime.now()
+    startTime = datetime.now()  # set the startTime here, then the min and max function can display time passed
     # go through the board and check to see if that square as a moveTable entry if it doesn't generate one for it
     # the moveTable is like this square -> list of moves possible for that piece on that square
     nodes = 0
-    #iPrint()
     i = 0
     val = -99999
     for move in list(board.generate_legal_moves()):
-        if threadFlag == True: break
+        if threadFlag == True: break    # if the GUI wants the engine to stop then break out this loop
         print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
         board.push(move)
         newVal = mini(depth-1, -99999, 99999, move.uci())
+        board.pop()
         if val <= newVal:
             bestMove = move.uci()
             val = newVal
-        board.pop()
         i+=1
-    #iPrint()
-    print ('bestmove {}'.format(bestMove))  # print out the best move
+    print('info time {}'.format(datetime.now()-startTime))
+    print ('bestmove {}'.format(bestMove))  # finally print out the best move
         
+# stop the go thread
 def stopThread():
     global threadFlag
     threadFlag = True
     global goThread
     goThread.join()
 
+#position evaluation boards for each piece
 pawnTable = [0,  0,  0,  0,  0,  0,  0,  0,
 50, 50, 50, 50, 50, 50, 50, 50,
 10, 10, 20, 30, 30, 20, 10, 10,
@@ -224,6 +220,7 @@ kingEndGameTable = [-50,-40,-30,-20,-20,-30,-40,-50,
 
 def evalFunction(mBoard):
     color = mBoard.turn
+    # material evaluation
     scoreForKings = 20000 * (mBoard.pieces(chess.KING,color).__len__() - mBoard.pieces(chess.KING,not color).__len__())
     scoreForQueens = 900* (mBoard.pieces(chess.QUEEN,color).__len__() - mBoard.pieces(chess.QUEEN,not color).__len__())
     scoreForRook = 500 * (mBoard.pieces(chess.ROOK,color).__len__() - mBoard.pieces(chess.ROOK,not color).__len__())
@@ -231,6 +228,8 @@ def evalFunction(mBoard):
     scoreForBishopKnight += (mBoard.pieces(chess.KNIGHT,color).__len__()-mBoard.pieces(chess.KNIGHT,not color).__len__())
     scoreForBishopKnight *= 330
     scoreForPawn = 100 * (mBoard.pieces(chess.PAWN,color).__len__() - mBoard.pieces(chess.PAWN,not color).__len__())
+
+    # position evaluation
     pieceMap = mBoard.piece_map()
     for square,piece in pieceMap.items():
         if piece is not None and piece.color == color:
@@ -264,7 +263,12 @@ def evalFunction(mBoard):
                     scoreForQueens += queenTable[square]
                 elif piece.piece_type == chess.KING:
                     scoreForKings += kingTable[square]
-    return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn
+    # Mobility evaluation
+    scoreMobility = len(list(mBoard.generate_legal_moves()  # my num of legal moves
+    mBoard.turn = (not mBoard.turn)
+    scoreMobility -= len(list(mBoard.generate_legal_moves()))   # -opponents num of legal moves
+    scoreMobility *= 0.1
+    return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn + scoreMobility
 
 def iPrint():
     print(board)
