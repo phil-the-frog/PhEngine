@@ -19,6 +19,11 @@ moveTable = dict()          # a hash table to store the moves for each square to
 threadFlag = False          # a flag to tell the thread when to stop running
 bestMove = ''               # the current best move found, stored in uci format
 
+zorbistSqaures = [dict()]*64    # each square will have a dict where the keys are the pieces and the values are the random gen vals
+zorbistIsBlack = None   # one number if it's blacks turn
+zorbistCastling = [None]*4    # 4 nums, 2 for each color, and 2 for kings/queens side
+zorbistEnPassant = [None]*8   # 8 nums, one for each file where a valid en passant is possible
+
 def main():
     global goThread
     while True:             # uci works with stdin and stdout so we'll loop for the duration of the program
@@ -56,11 +61,32 @@ def iSetOption(inStr):
     pass
 
 def iIsReady():
-    # no internal hashtables or move transposition tables to set up yet
+    global zorbistSqaures 
+    global zorbistIsBlack 
+    global zorbistCastling 
+    global zorbistEnPassant 
+    random.seed(2530395)    # random seed from random.org
+
+    #generate the random num for the squares
+    symbols = ["p", "n", "b", "r", "q", "k", "P", "N", "B", "R", "Q", "K"]
+    for square in chess.SQUARES:
+        for sym in symbols:
+            zorbistSqaures[square][sym] = random.randint
+    
+    #generate the random num for if blacks turn
+    zorbistIsBlack = random.randint
+
+    #generate the random num for casting and en passant
+    for i in range(4):
+        zorbistCastling[i] = random.randint
+    for i in range(8):
+        zorbistEnPassant[i] = random.randint
     print('readyok')
 
+
 def iNewGame():
-    moveTable.clear()
+    # erase the hash table if you like
+    pass
 
 def iPosition(inStr):
     global board
@@ -83,11 +109,11 @@ def maxi(depth, alpha, beta, pv):
     global board
     global startTime
     global nodes
-    if depth == 0 : 
+    if depth == 0: 
         return evalFunction(board)
-    if nodes % 10000 == 0:
-        print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
-    for move in list(board.generate_legal_moves()):
+    for move in board.legal_moves:
+        if nodes % 1000 == 0:
+            print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
         nodes += 1
         board.push(move)
         score = mini(depth - 1, alpha, beta, pv+' '+move.uci())
@@ -105,9 +131,9 @@ def mini(depth, alpha, beta, pv):
     if depth == 0: 
         return -evalFunction(board)
     # only display info every 10k nodes so the log doesn't get spammed
-    if nodes % 10000 == 0:
-        print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
-    for move in list(board.generate_legal_moves()):
+    for move in board.legal_moves:
+        if nodes % 1000 == 0:
+            print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
         nodes += 1
         board.push(move)
         score = maxi(depth - 1, alpha, beta, pv+' '+move.uci())
@@ -117,6 +143,21 @@ def mini(depth, alpha, beta, pv):
         if score < beta:
             beta = score
     return beta
+
+def boardToZorbistKey(mBoard):
+    global zorbistSqaures 
+    global zorbistIsBlack 
+    global zorbistCastling 
+    global zorbistEnPassant 
+
+    result = 0
+    for square,piece in mBoard.piece_map().items():
+        result = result ^ zorbistSqaures[square][piece.symbol()]
+    
+    result = result ^ zorbistIsBlack if mBoard.turn == False else result
+    # lets forget about castling and enPassant for now
+    return result
+
 
 # ignoring inStr right now
 def iGo(inStr):
@@ -134,7 +175,7 @@ def iGo(inStr):
     nodes = 0
     i = 0
     val = -99999
-    for move in list(board.generate_legal_moves()):
+    for move in board.legal_moves:
         if threadFlag == True: break    # if the GUI wants the engine to stop then break out this loop
         print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
         board.push(move)
@@ -264,10 +305,12 @@ def evalFunction(mBoard):
                 elif piece.piece_type == chess.KING:
                     scoreForKings += kingTable[square]
     # Mobility evaluation
-    scoreMobility = len(list(mBoard.generate_legal_moves()  # my num of legal moves
-    mBoard.turn = (not mBoard.turn)
-    scoreMobility -= len(list(mBoard.generate_legal_moves()))   # -opponents num of legal moves
+    scoreMobility = mBoard.legal_moves.count()  # my num of legal moves
+    mBoard.push(chess.Move.null())              # push a null move to change to the other side
+    scoreMobility -= mBoard.legal_moves.count() # -opponents num of legal moves
     scoreMobility *= 0.1
+    mBoard.pop()    # pop the null move
+
     return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn + scoreMobility
 
 def iPrint():
