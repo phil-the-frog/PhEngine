@@ -87,10 +87,10 @@ def maxi(depth, alpha, beta, pv):
     global board
     global startTime
     global nodes
-    if depth == 0: 
-        if nodes % 10000 == 0:
-            print('info depth {} score cp {} pv {}'.format(depth, alpha,pv))
-        return evalFunction()
+    if depth == 0 : 
+        return evalFunction(board)
+    if nodes % 10000 == 0:
+        print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
     for move in list(board.generate_legal_moves()):
         nodes += 1
         ##print('info depth {} nodes {} score cp {} time {}'.format(depth,nodes,evalFunction(),datetime.now()-startTime))
@@ -108,9 +108,9 @@ def mini(depth, alpha, beta, pv):
     global startTime
     global nodes
     if depth == 0: 
-        if nodes % 10000 == 0:
-            print('info depth {} score cp {} pv {}'.format(depth, alpha,pv))
-        return -evalFunction()
+        return -evalFunction(board)
+    if nodes % 10000 == 0:
+        print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
     #print('info depth {}'.format(depth))
     for move in list(board.generate_legal_moves()):
         nodes += 1
@@ -144,7 +144,7 @@ def iGo(inStr):
         if threadFlag == True: break
         print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
         board.push(move)
-        newVal = maxi(depth, -99999, 99999, move.uci())
+        newVal = mini(depth-1, -99999, 99999, move.uci())
         if val <= newVal:
             bestMove = move.uci()
             val = newVal
@@ -222,20 +222,19 @@ kingEndGameTable = [-50,-40,-30,-20,-20,-30,-40,-50,
 -30,-30,  0,  0,  0,  0,-30,-30,
 -50,-30,-30,-30,-30,-30,-30,-50]
 
-def evalFunction():
-    global color
-    global board
-    scoreForKings = 20000 * (board.pieces(chess.KING,color).__len__() - board.pieces(chess.KING,not color).__len__())
-    scoreForQueens = 900* (board.pieces(chess.QUEEN,color).__len__() - board.pieces(chess.QUEEN,not color).__len__())
-    scoreForRook = 500 * (board.pieces(chess.ROOK,color).__len__() - board.pieces(chess.ROOK,not color).__len__())
-    scoreForBishopKnight = (board.pieces(chess.BISHOP,color).__len__()-board.pieces(chess.BISHOP,not color).__len__())
-    scoreForBishopKnight += (board.pieces(chess.KNIGHT,color).__len__()-board.pieces(chess.KNIGHT,not color).__len__())
+def evalFunction(mBoard):
+    color = mBoard.turn
+    scoreForKings = 20000 * (mBoard.pieces(chess.KING,color).__len__() - mBoard.pieces(chess.KING,not color).__len__())
+    scoreForQueens = 900* (mBoard.pieces(chess.QUEEN,color).__len__() - mBoard.pieces(chess.QUEEN,not color).__len__())
+    scoreForRook = 500 * (mBoard.pieces(chess.ROOK,color).__len__() - mBoard.pieces(chess.ROOK,not color).__len__())
+    scoreForBishopKnight = (mBoard.pieces(chess.BISHOP,color).__len__()-mBoard.pieces(chess.BISHOP,not color).__len__())
+    scoreForBishopKnight += (mBoard.pieces(chess.KNIGHT,color).__len__()-mBoard.pieces(chess.KNIGHT,not color).__len__())
     scoreForBishopKnight *= 330
-    scoreForPawn = 100 * (board.pieces(chess.PAWN,color).__len__() - board.pieces(chess.PAWN,not color).__len__())
-    pieceMap = board.piece_map()
+    scoreForPawn = 100 * (mBoard.pieces(chess.PAWN,color).__len__() - mBoard.pieces(chess.PAWN,not color).__len__())
+    pieceMap = mBoard.piece_map()
     for square,piece in pieceMap.items():
         if piece is not None and piece.color == color:
-            if color == chess.BLACK:
+            if color == chess.WHITE:
                 mfile = chess.square_file(square)
                 mrank = chess.square_rank(square)
                 mrank = 7 - mrank
