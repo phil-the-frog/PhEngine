@@ -19,8 +19,8 @@ moveTable = dict()          # a hash table to store the moves for each square to
 threadFlag = False          # a flag to tell the thread when to stop running
 bestMove = ''               # the current best move found, stored in uci format
 
-zorbistSqaures = [dict()]*64    # each square will have a dict where the keys are the pieces and the values are the random gen vals
-zorbistIsBlack = None   # one number if it's blacks turn
+zorbistSqaures = [None]*64    # 64 dicts, each square will have a dict where the keys are the pieces and the values are the random gen vals
+zorbistIsBlack = None         # one number if it's blacks turn
 zorbistCastling = [None]*4    # 4 nums, 2 for each color, and 2 for kings/queens side
 zorbistEnPassant = [None]*8   # 8 nums, one for each file where a valid en passant is possible
 
@@ -68,19 +68,20 @@ def iIsReady():
     random.seed(2530395)    # random seed from random.org
 
     #generate the random num for the squares
-    symbols = ["p", "n", "b", "r", "q", "k", "P", "N", "B", "R", "Q", "K"]
+    symbols = ['p', 'n', 'b', 'r', 'q', 'k', 'P', 'N', 'B', 'R', 'Q', 'K']
     for square in chess.SQUARES:
+        zorbistSqaures[square] = dict()
         for sym in symbols:
-            zorbistSqaures[square][sym] = random.randint
+            zorbistSqaures[square][sym] = random.randint(0,9223372036854775807)
     
     #generate the random num for if blacks turn
-    zorbistIsBlack = random.randint
+    zorbistIsBlack = random.randint(0,9223372036854775807)
 
     #generate the random num for casting and en passant
     for i in range(4):
-        zorbistCastling[i] = random.randint
+        zorbistCastling[i] = random.randint(0,9223372036854775807)
     for i in range(8):
-        zorbistEnPassant[i] = random.randint
+        zorbistEnPassant[i] = random.randint(0,9223372036854775807)
     print('readyok')
 
 
@@ -102,47 +103,58 @@ def iPosition(inStr):
     elif inStr.startswith('fen'):
         board.set_fen(inStr.partition('fen ')[2])   # use the fen string at the end to build a new board
     
+class OldMove:
+    bestMove = ''
+    depth = 0
+    alpha = 0
+    beta = 0
+
+    def __init__(self, bestMove, depth, alpha, beta):
+        self.bestMove = bestMove
+        self.depth = depth
+        self.alpha = alpha
+        self.beta = beta
 
 startTime = 0
 nodes = 0
-def maxi(depth, alpha, beta, pv):
+def negaMax(maxDepth, depth, alpha, beta, pv, maximizing):
     global board
     global startTime
     global nodes
-    if depth == 0: 
-        return evalFunction(board)
+    global threadFlag
+    myBestMove = ''
+    if depth >= maxDepth or threadFlag: 
+        return evalFunction(board) if maximizing else -evalFunction(board)
     for move in board.legal_moves:
-        if nodes % 1000 == 0:
-            print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
         nodes += 1
         board.push(move)
-        score = mini(depth - 1, alpha, beta, pv+' '+move.uci())
-        board.pop()
-        if score >= beta:
-            return beta
-        if score > alpha:
-            alpha = score
-    return alpha
+        zorbKey = boardToZorbistKey(board)
+        if zorbKey in moveTable:   # if the moves has been seen before then use that old eval to help you
+            oldResults = moveTable[zorbKey]
+            if maximizing and oldResults.alpha >= alpha:
+                score = oldResults.alpha
+            elif not maximizing and oldResults.beta <= beta:
+                score = oldResults.beta
+        else:
+            score = negaMax(maxDepth, depth+1, alpha, beta, pv+' '+move.uci(), not maximizing)
+            moveTable[boardToZorbistKey(board)] = OldMove(move.uci(), depth,alpha,beta)
 
-def mini(depth, alpha, beta, pv):
-    global board
-    global startTime
-    global nodes
-    if depth == 0: 
-        return -evalFunction(board)
-    # only display info every 10k nodes so the log doesn't get spammed
-    for move in board.legal_moves:
-        if nodes % 1000 == 0:
-            print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth, alpha,pv))
-        nodes += 1
-        board.push(move)
-        score = maxi(depth - 1, alpha, beta, pv+' '+move.uci())
+        # if you havent seen it befor then add it to the table
         board.pop()
-        if score <= alpha:
-            return alpha
-        if score < beta:
-            beta = score
-    return beta
+        if maximizing:
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+                myBestMove = move.uci()
+        elif not maximizing:
+            if score <= alpha:
+                return alpha
+            if score < beta:
+                beta = score
+                myBestMove = move.uci()
+    print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth,alpha,pv))
+    return alpha if maximizing else beta
 
 def boardToZorbistKey(mBoard):
     global zorbistSqaures 
@@ -152,7 +164,8 @@ def boardToZorbistKey(mBoard):
 
     result = 0
     for square,piece in mBoard.piece_map().items():
-        result = result ^ zorbistSqaures[square][piece.symbol()]
+        symb = piece.symbol()
+        result = result ^ zorbistSqaures[square][symb]
     
     result = result ^ zorbistIsBlack if mBoard.turn == False else result
     # lets forget about castling and enPassant for now
@@ -161,7 +174,7 @@ def boardToZorbistKey(mBoard):
 
 # ignoring inStr right now
 def iGo(inStr):
-    depth = 4                       # default depth is 4 for now
+    depth = 1                       # default depth is 4 for now
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
     if 'depth' in inStr:
         depth = int(inStr[inStr.index('depth')+1])
@@ -173,19 +186,25 @@ def iGo(inStr):
     # go through the board and check to see if that square as a moveTable entry if it doesn't generate one for it
     # the moveTable is like this square -> list of moves possible for that piece on that square
     nodes = 0
-    i = 0
-    val = -99999
+    while (not threadFlag):
+        negaMax(depth, -1, -99999, 99999, '', True)
+        print('info nodes {} depth {}'.format(nodes, depth))
+        depth += 1
+    '''
     for move in board.legal_moves:
         if threadFlag == True: break    # if the GUI wants the engine to stop then break out this loop
         print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
         board.push(move)
-        newVal = mini(depth-1, -99999, 99999, move.uci())
+        newVal = negaMax(depth, 1, -99999, 99999, move.uci(), False)
         board.pop()
         if val <= newVal:
             bestMove = move.uci()
             val = newVal
         i+=1
+    '''
+    threadFlag = False
     print('info time {}'.format(datetime.now()-startTime))
+    bestMove = moveTable[boardToZorbistKey(board)].bestMove
     print ('bestmove {}'.format(bestMove))  # finally print out the best move
         
 # stop the go thread
