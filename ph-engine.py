@@ -10,6 +10,7 @@ import chess
 import random
 import threading
 from datetime import datetime
+from operator import itemgetter
 
 board = chess.Board()       # internal state of the board
 author = 'Phillip Sopt'
@@ -40,9 +41,8 @@ def main():
         elif uciIn.startswith('position'):
             iPosition(uciIn[9:])        # 9 to skip the 'position'
         elif uciIn.startswith('go'):
-            #goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))   # set up the go thread and let it run
-            #goThread.start()
-            iGo('movetime 60000')
+            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))   # set up the go thread and let it run
+            goThread.start()
         elif uciIn == 'stop':
             stopThread()
         elif uciIn == 'quit':
@@ -199,9 +199,12 @@ def iGo(inStr):
     nodes = 0           # nodes processed throught the search
     val = -999999       # the max score for a root move
     newVal = 0          # score of the current root move
+    moveLen = board.legal_moves.count()
+    moveList = [None]*moveLen
 
     # while the stop signal isn't recieved
     while (not threadFlag):
+        i = 0
         # do iterative deepening on the root moves to fill up the movesTable
         for move in board.legal_moves:
             zorbKey = boardToZorbistKey(board)
@@ -213,11 +216,15 @@ def iGo(inStr):
                     newVal = negaMax(depth, 0, -99999, 99999, '', False, time)  # use False because this fuction is maximising the ai
             else:
                 newVal = negaMax(depth, 0, -99999, 99999, '', False, time)
+            '''
             # if a better move was found set bestMove to that
             if newVal >= val:
                 bestMove = move.uci()
                 val = newVal
+            '''
+            moveList[i] = (move.uci(),0+newVal)
             print('info nodes {} currmove {} depth {}'.format(nodes, move.uci(), depth))
+            i += 1
         depth += 1
     ''' old code
     for move in board.legal_moves:
@@ -233,6 +240,7 @@ def iGo(inStr):
     '''
     threadFlag = False
     print('info time {}'.format(datetime.now()-startTime))  # print the time it took
+    bestMove = max(moveList,key=itemgetter(1))[0]
     print ('bestmove {}'.format(bestMove))  # finally print out the best move
         
 # stop the go thread
@@ -320,7 +328,7 @@ def evalFunction(mBoard):
     # position evaluation
     pieceMap = mBoard.piece_map()
     for square,piece in pieceMap.items():
-        if piece is not None and piece.color == color:
+        if piece.color == color:
             if color == chess.WHITE:
                 mfile = chess.square_file(square)
                 mrank = chess.square_rank(square)
@@ -328,37 +336,64 @@ def evalFunction(mBoard):
                 reversedSquare = chess.square(mfile,mrank)
                 if piece.piece_type == chess.PAWN:
                     scoreForPawn += pawnTable[reversedSquare]
+                    scoreForPawn += 100
                 elif piece.piece_type == chess.KNIGHT:
                     scoreForBishopKnight += knightTable[reversedSquare]
+                    scoreForBishopKnight += 320
                 elif piece.piece_type == chess.BISHOP:
                     scoreForBishopKnight += bishopTable[reversedSquare]
+                    scoreForBishopKnight += 330
                 elif piece.piece_type == chess.ROOK:
                     scoreForRook += rookTable[reversedSquare]
+                    scoreForRook += 500
                 elif piece.piece_type == chess.QUEEN:
                     scoreForQueens += queenTable[reversedSquare]
+                    scoreForQueens += 900
                 elif piece.piece_type == chess.KING:
                     scoreForKings += kingTable[reversedSquare]
+                    scoreForKings += 20000
             else:
                 if piece.piece_type == chess.PAWN:
                     scoreForPawn += pawnTable[square]
+                    scoreForPawn += 100
                 elif piece.piece_type == chess.KNIGHT:
                     scoreForBishopKnight += knightTable[square]
+                    scoreForBishopKnight += 320
                 elif piece.piece_type == chess.BISHOP:
                     scoreForBishopKnight += bishopTable[square]
+                    scoreForBishopKnight += 330
                 elif piece.piece_type == chess.ROOK:
                     scoreForRook += rookTable[square]
+                    scoreForRook += 500
                 elif piece.piece_type == chess.QUEEN:
                     scoreForQueens += queenTable[square]
+                    scoreForQueens += 900
                 elif piece.piece_type == chess.KING:
                     scoreForKings += kingTable[square]
-    # Mobility evaluation
+                    scoreForKings += 20000
+        else:                                   # if the piece isn't our color
+            if piece.piece_type == chess.PAWN:
+                scoreForPawn -= 100
+            elif piece.piece_type == chess.KNIGHT:
+                scoreForBishopKnight -= 320
+            elif piece.piece_type == chess.BISHOP:
+                scoreForBishopKnight -= 330
+            elif piece.piece_type == chess.ROOK:
+                scoreForRook -= 500
+            elif piece.piece_type == chess.QUEEN:
+                scoreForQueens -= 900
+            elif piece.piece_type == chess.KING:
+                scoreForKings -= 20000
+    '''
+    # Mobility evaluation, This might be slow too
     scoreMobility = mBoard.legal_moves.count()  # my num of legal moves
     mBoard.push(chess.Move.null())              # push a null move to change to the other side
     scoreMobility -= mBoard.legal_moves.count() # -opponents num of legal moves
     scoreMobility *= 0.1
     mBoard.pop()    # pop the null move
-
     return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn + scoreMobility
+    '''
+    return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn
 
 def iPrint():
     print(board)
