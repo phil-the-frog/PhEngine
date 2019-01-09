@@ -92,7 +92,7 @@ def iNewGame():
 
 def iPosition(inStr):
     global board
-    board = chess.Board()
+    board.clear()
     if inStr.startswith('startpos'):    # if we have to start with the std chess startpos
         board.set_fen(chess.STARTING_FEN)
         #do a while loop till there's no more input
@@ -114,56 +114,69 @@ class OldMove:
         self.depth = depth
         self.evalu = evalu
 
+time = 0
 startTime = 0
 nodes = 0
-def negaMax(maxDepth, depth, alpha, beta, pv, maximizing, time):
+def maxi(maxDepth, depth, alpha, beta):
+    global moveTable
     global board
     global startTime
-    global nodes
     global threadFlag
-    myBestMove = ''                                 # isn't used anymore
+    global nodes
+    global time
     timePast = (datetime.now()-startTime).seconds   # the time that past in sec
     if timePast > time: threadFlag = True           # if we are overtime, set flag to exit
-    if depth >= maxDepth or threadFlag: 
-        return evalFunction(board) if maximizing else -evalFunction(board)  # use negative for opponent, we are trying to minimize them
-
+    if depth >= maxDepth or threadFlag: return evalFunction(board)
     for move in board.legal_moves:          # now go through all our moves
         nodes += 1
         board.push(move)                    # update the board with that move
         zorbKey = boardToZorbistKey(board)
-        if zorbKey in moveTable:            # if the moves has been seen before then use that old eval to help you
-            oldResults = moveTable[zorbKey]
-            if oldResults.depth >= depth:   # if the oldresult is deep enough use it
-                if maximizing and oldResults.evalu >= alpha:        # old result's eval needs to be better then the current one
-                    score = oldResults.evalu
-                elif not maximizing and oldResults.evalu <= beta:
-                    score = oldResults.evalu
-                else:
-                    score = negaMax(maxDepth, depth+1, alpha, beta, pv+' '+move.uci(), not maximizing, time)
-            else:
-                score = negaMax(maxDepth, depth+1, alpha, beta, pv+' '+move.uci(), not maximizing, time)
-        else:
-            score = negaMax(maxDepth, depth+1, alpha, beta, pv+' '+move.uci(), not maximizing, time)
+        try:
+            with moveTable[zorbKey] as oldResults:
+                score = oldResults.evalu if oldResults.eval >= depth and oldResults.evalu >= alpha else mini(maxDepth, depth+1, alpha, beta)
+        except:
+            score = mini(maxDepth, depth+1, alpha, beta)
 
         # if you havent seen it before then add it to the table
         board.pop()
-        if maximizing:          
-            if score >= beta:       # beta cutoff, the score we processed is better then the sub tree's lowest score
-                                    # (recall beta was set to 9999999 at the start)
-                return beta         # so bail, this tree is a lost cause
-            if score > alpha:       # here the score is better then the best score in this tree
-                alpha = score       # so update the bestMove
-                myBestMove = move.uci()
-                moveTable[zorbKey] = OldMove(move.uci(), depth, score)  # update the moveTable too
-        elif not maximizing:
-            if score <= alpha:      # alpha cutoff, the score we got is REALLY GOOD, we want the opponent to lose remember?
-                return alpha        # (recall alpha was set to -999999 at the start)
-            if score < beta:        # we got a worse score, great use it instead
-                beta = score
-                myBestMove = move.uci()
-                moveTable[zorbKey] = OldMove(move.uci(), depth, score)
-    print('info time {} nodes {} depth {} score cp {} pv {}'.format(datetime.now() - startTime,nodes,depth,alpha,pv))
-    return alpha if maximizing else beta
+        if score >= beta:       # beta cutoff, the score we processed is better then the sub tree's lowest score
+                                # (recall beta was set to 9999999 at the start)
+            return beta         # so bail, this tree is a lost cause
+        if score > alpha:       # here the score is better then the best score in this tree
+            alpha = score       # so update the bestMove
+            moveTable[zorbKey] = OldMove(move.uci(), depth, score)  # update the moveTable too
+    print('info time {} nodes {} depth {} score cp {}'.format(datetime.now() - startTime,nodes,depth,alpha))
+    return alpha
+
+def mini(maxDepth, depth, alpha, beta):
+    global moveTable
+    global board
+    global startTime
+    global threadFlag
+    global nodes
+    global time
+    timePast = (datetime.now()-startTime).seconds   # the time that past in sec
+    if timePast > time: threadFlag = True           # if we are overtime, set flag to exit
+    if depth >= maxDepth or threadFlag: return -evalFunction(board)
+    for move in board.legal_moves:          # now go through all our moves
+        nodes += 1
+        board.push(move)                    # update the board with that move
+        zorbKey = boardToZorbistKey(board)
+        try:
+            with moveTable[zorbKey] as oldResults:
+                score = oldResults.evalu if oldResults.eval >= depth and oldResults.evalu <= beta else maxi(maxDepth, depth+1, alpha, beta)
+        except:
+            score = maxi(maxDepth, depth+1, alpha, beta)
+
+        # if you havent seen it before then add it to the table
+        board.pop()
+        if score <= alpha:      # alpha cutoff, the score we got is REALLY GOOD, we want the opponent to lose remember?
+            return alpha        # (recall alpha was set to -999999 at the start)
+        if score < beta:        # we got a worse score, great use it instead
+            beta = score
+            moveTable[zorbKey] = OldMove(move.uci(), depth, score)
+    print('info time {} nodes {} depth {} score cp {}'.format(datetime.now() - startTime,nodes,depth,beta))
+    return beta
 
 def boardToZorbistKey(mBoard):
     global zorbistSqaures 
@@ -180,9 +193,35 @@ def boardToZorbistKey(mBoard):
     # lets forget about castling and enPassant for now
     return result
 
+def calcPV():
+    global moveTable
+    global board
+    i = 0
+    resStr = []
+    zorbKey = boardToZorbistKey(board)
+    while(zorbKey in moveTable):
+        move = moveTable[zorbKey].bestMove
+        resStr.append(move)
+        try:
+            board.push_uci(move)    # found the bug, duplicate zorbKeys, work on your zorbKey func
+        except:
+            break
+        zorbKey = boardToZorbistKey(board)
+        i+=1
+    for k in range(i):
+        board.pop()
+    return ' '.join(resStr)
 
+        
 # inStr is the parameters that the gui sends to go like 'movetime' 'depth' ...
 def iGo(inStr):
+    global moveTable
+    global board
+    global startTime
+    global time                     # used to limit the search, not passed into the max/min func
+    global bestMove
+    global nodes
+    global threadFlag
     time = 999999                   # default time to search
     depth = 2                       # default depth is 2 for now
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
@@ -190,10 +229,6 @@ def iGo(inStr):
         depth = int(inStr[inStr.index('depth')+1])
     if 'movetime' in inStr:         # get the movetime if the gui passed it in
         time = int(inStr[inStr.index('movetime')+1]) / 1000
-    global startTime
-    global bestMove
-    global nodes
-    global threadFlag
     startTime = datetime.now()  # set the startTime here, then the min and max function can display time passed
 
     nodes = 0           # nodes processed throught the search
@@ -201,47 +236,33 @@ def iGo(inStr):
     newVal = 0          # score of the current root move
     moveLen = board.legal_moves.count()
     moveList = [None]*moveLen
+    print(moveList)
 
     # while the stop signal isn't recieved
     while (not threadFlag):
         i = 0
         # do iterative deepening on the root moves to fill up the movesTable
         for move in board.legal_moves:
+            if threadFlag: break
+            board.push(move)
             zorbKey = boardToZorbistKey(board)
-            if zorbKey in moveTable:            # if the moves has been seen before then use that old eval to help you
-                oldResults = moveTable[zorbKey]
-                if oldResults.depth >= depth:   # make sure the old result's depth is deeper then the current depth
-                    newVal = oldResults.evalu
-                else:   # if the oldResults aren't deep enough, reprocess that sub tree
-                    newVal = negaMax(depth, 0, -99999, 99999, '', False, time)  # use False because this fuction is maximising the ai
-            else:
-                newVal = negaMax(depth, 0, -99999, 99999, '', False, time)
-            '''
-            # if a better move was found set bestMove to that
-            if newVal >= val:
-                bestMove = move.uci()
-                val = newVal
-            '''
+            try:
+                with moveTable[zorbKey] as oldResults:  # if the moves has been seen before then use that old eval to help you
+                    #if the oldResults are deep enought
+                    newVal = oldResults.evalu if oldResults.eval >= depth else mini(depth, 1, -99999, 99999)
+            except:
+                newVal = mini(depth, 1, -99999, 99999)
+            board.pop()
             moveList[i] = (move.uci(),0+newVal)
-            print('info nodes {} currmove {} depth {}'.format(nodes, move.uci(), depth))
             i += 1
+        pair = max(moveList,key=itemgetter(1))
+        bestMove = pair[0]
         depth += 1
-    ''' old code
-    for move in board.legal_moves:
-        if threadFlag == True: break    # if the GUI wants the engine to stop then break out this loop
-        print('info nodes {} currmove {} currmovenumber {}'.format(nodes, move.uci(),i))
-        board.push(move)
-        newVal = negaMax(depth, 1, -99999, 99999, move.uci(), False)
-        board.pop()
-        if val <= newVal:
-            bestMove = move.uci()
-            val = newVal
-        i+=1
-    '''
+    moveTable[boardToZorbistKey(board)] = OldMove(bestMove,depth,pair[1]-1)  # update the moveTable
+    print('info nodes {} depth {} pv {}'.format(nodes, depth, calcPV()))
     threadFlag = False
     print('info time {}'.format(datetime.now()-startTime))  # print the time it took
-    bestMove = max(moveList,key=itemgetter(1))[0]
-    print ('bestmove {}'.format(bestMove))  # finally print out the best move
+    print ('bestmove {}'.format(bestMove))      # finally print out the best move
         
 # stop the go thread
 def stopThread():
@@ -314,8 +335,10 @@ kingEndGameTable = [-50,-40,-30,-20,-20,-30,-40,-50,
 -30,-30,  0,  0,  0,  0,-30,-30,
 -50,-30,-30,-30,-30,-30,-30,-50]
 
+# evals will be positive if white is winning and negative if black is winning
 def evalFunction(mBoard):
     color = mBoard.turn
+    ''' OLD SLOW CODE
     # material evaluation, might be really slow try to optimize
     scoreForKings = 20000 * (mBoard.pieces(chess.KING,color).__len__() - mBoard.pieces(chess.KING,not color).__len__())
     scoreForQueens = 900* (mBoard.pieces(chess.QUEEN,color).__len__() - mBoard.pieces(chess.QUEEN,not color).__len__())
@@ -324,65 +347,57 @@ def evalFunction(mBoard):
     scoreForBishopKnight += (mBoard.pieces(chess.KNIGHT,color).__len__()-mBoard.pieces(chess.KNIGHT,not color).__len__())
     scoreForBishopKnight *= 330
     scoreForPawn = 100 * (mBoard.pieces(chess.PAWN,color).__len__() - mBoard.pieces(chess.PAWN,not color).__len__())
+    '''
+    scoreForKings = 0
+    scoreForQueens = 0
+    scoreForRook = 0
+    scoreForBishopKnight = 0
+    scoreForPawn = 0
 
     # position evaluation
     pieceMap = mBoard.piece_map()
     for square,piece in pieceMap.items():
-        if piece.color == color:
-            if color == chess.WHITE:
-                mfile = chess.square_file(square)
-                mrank = chess.square_rank(square)
-                mrank = 7 - mrank
-                reversedSquare = chess.square(mfile,mrank)
-                if piece.piece_type == chess.PAWN:
-                    scoreForPawn += pawnTable[reversedSquare]
-                    scoreForPawn += 100
-                elif piece.piece_type == chess.KNIGHT:
-                    scoreForBishopKnight += knightTable[reversedSquare]
-                    scoreForBishopKnight += 320
-                elif piece.piece_type == chess.BISHOP:
-                    scoreForBishopKnight += bishopTable[reversedSquare]
-                    scoreForBishopKnight += 330
-                elif piece.piece_type == chess.ROOK:
-                    scoreForRook += rookTable[reversedSquare]
-                    scoreForRook += 500
-                elif piece.piece_type == chess.QUEEN:
-                    scoreForQueens += queenTable[reversedSquare]
-                    scoreForQueens += 900
-                elif piece.piece_type == chess.KING:
-                    scoreForKings += kingTable[reversedSquare]
-                    scoreForKings += 20000
-            else:
-                if piece.piece_type == chess.PAWN:
-                    scoreForPawn += pawnTable[square]
-                    scoreForPawn += 100
-                elif piece.piece_type == chess.KNIGHT:
-                    scoreForBishopKnight += knightTable[square]
-                    scoreForBishopKnight += 320
-                elif piece.piece_type == chess.BISHOP:
-                    scoreForBishopKnight += bishopTable[square]
-                    scoreForBishopKnight += 330
-                elif piece.piece_type == chess.ROOK:
-                    scoreForRook += rookTable[square]
-                    scoreForRook += 500
-                elif piece.piece_type == chess.QUEEN:
-                    scoreForQueens += queenTable[square]
-                    scoreForQueens += 900
-                elif piece.piece_type == chess.KING:
-                    scoreForKings += kingTable[square]
-                    scoreForKings += 20000
-        else:                                   # if the piece isn't our color
+        if piece.color == chess.WHITE:        # if white reverse the position tables
+            mfile = chess.square_file(square)
+            mrank = chess.square_rank(square)
+            mrank = 7 - mrank
+            reversedSquare = chess.square(mfile,mrank)
             if piece.piece_type == chess.PAWN:
+                scoreForPawn += pawnTable[reversedSquare]
+                scoreForPawn += 100
+            elif piece.piece_type == chess.KNIGHT:
+                scoreForBishopKnight += knightTable[reversedSquare]
+                scoreForBishopKnight += 320
+            elif piece.piece_type == chess.BISHOP:
+                scoreForBishopKnight += bishopTable[reversedSquare]
+                scoreForBishopKnight += 330
+            elif piece.piece_type == chess.ROOK:
+                scoreForRook += rookTable[reversedSquare]
+                scoreForRook += 500
+            elif piece.piece_type == chess.QUEEN:
+                scoreForQueens += queenTable[reversedSquare]
+                scoreForQueens += 900
+            elif piece.piece_type == chess.KING:
+                scoreForKings += kingTable[reversedSquare]
+                scoreForKings += 20000
+        else:
+            if piece.piece_type == chess.PAWN:
+                scoreForPawn -= pawnTable[square]
                 scoreForPawn -= 100
             elif piece.piece_type == chess.KNIGHT:
+                scoreForBishopKnight -= knightTable[square]
                 scoreForBishopKnight -= 320
             elif piece.piece_type == chess.BISHOP:
+                scoreForBishopKnight -= bishopTable[square]
                 scoreForBishopKnight -= 330
             elif piece.piece_type == chess.ROOK:
+                scoreForRook -= rookTable[square]
                 scoreForRook -= 500
             elif piece.piece_type == chess.QUEEN:
+                scoreForQueens -= queenTable[square]
                 scoreForQueens -= 900
             elif piece.piece_type == chess.KING:
+                scoreForKings -= kingTable[square]
                 scoreForKings -= 20000
     '''
     # Mobility evaluation, This might be slow too
@@ -393,7 +408,7 @@ def evalFunction(mBoard):
     mBoard.pop()    # pop the null move
     return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn + scoreMobility
     '''
-    return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn
+    return (scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn) * (1 if color else -1)
 
 def iPrint():
     print(board)
