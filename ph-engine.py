@@ -41,8 +41,9 @@ def main():
         elif uciIn.startswith('position'):
             iPosition(uciIn[9:])        # 9 to skip the 'position'
         elif uciIn.startswith('go'):
-            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))   # set up the go thread and let it run
-            goThread.start()
+            iGo(uciIn[3:])
+            #goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))   # set up the go thread and let it run
+            #goThread.start()
         elif uciIn == 'stop':
             stopThread()
         elif uciIn == 'quit':
@@ -66,23 +67,24 @@ def iIsReady():
     global zorbistIsBlack 
     global zorbistCastling 
     global zorbistEnPassant 
-    random.seed(2530395)    # random seed from random.org
+    random.seed(3570648568523766397)    # random 64bit prime number
+    max64 = 9223372036854775807
 
     #generate the random num for the squares
     symbols = ['p', 'n', 'b', 'r', 'q', 'k', 'P', 'N', 'B', 'R', 'Q', 'K']
     for square in chess.SQUARES:
         zorbistSqaures[square] = dict()
         for sym in symbols:
-            zorbistSqaures[square][sym] = random.randint(0,9223372036854775807)
+            zorbistSqaures[square][sym] = random.randint(0,max64)
     
     #generate the random num for if blacks turn
-    zorbistIsBlack = random.randint(0,9223372036854775807)
+    zorbistIsBlack = random.randint(0,max64)
 
     #generate the random num for casting and en passant
     for i in range(4):
-        zorbistCastling[i] = random.randint(0,9223372036854775807)
+        zorbistCastling[i] = random.randint(0,max64)
     for i in range(8):
-        zorbistEnPassant[i] = random.randint(0,9223372036854775807)
+        zorbistEnPassant[i] = random.randint(0,max64)
     print('readyok')
 
 
@@ -104,12 +106,13 @@ def iPosition(inStr):
     elif inStr.startswith('fen'):
         board.set_fen(inStr.partition('fen ')[2])   # use the fen string at the end to build a new board
     
+# this is the structure that we are going to use to store our past moves in the moveTable
 class OldMove:
-    bestMove = ''
-    depth = 0
-    evalu = 0
+    bestMove = ''   # uci of the move
+    depth = 0       # how deep did we find it
+    evalu = 0       # what was it's evaluation
 
-    def __init__(self, bestMove, depth, evalu):
+    def __init__(self, bestMove, depth, evalu): # constructor
         self.bestMove = bestMove
         self.depth = depth
         self.evalu = evalu
@@ -183,14 +186,27 @@ def boardToZorbistKey(mBoard):
     global zorbistIsBlack 
     global zorbistCastling 
     global zorbistEnPassant 
-
     result = 0
+
+    # square
     for square,piece in mBoard.piece_map().items():
         symb = piece.symbol()
         result = result ^ zorbistSqaures[square][symb]
     
     result = result ^ zorbistIsBlack if mBoard.turn == False else result
-    # lets forget about castling and enPassant for now
+
+    #castling
+    whiteQueen = zorbistCastling[0]
+    whiteKing = zorbistCastling[1]
+    blackQueen = zorbistCastling[2]
+    blackKing = zorbistCastling[3]
+    if mBoard.has_queenside_castling_rights(chess.WHITE): result = result ^ whiteQueen
+    if mBoard.has_kingside_castling_rights(chess.WHITE): result = result ^ whiteKing
+    if mBoard.has_queenside_castling_rights(chess.BLACK): result = result ^ blackQueen
+    if mBoard.has_kingside_castling_rights(chess.BLACK): result = result ^ blackKing
+    
+    #en passant, there can be a max of one en passant
+    if mBoard.has_legal_en_passant(): result = result ^ zorbistEnPassant[chess.square_file(board.ep_square)]
     return result
 
 def calcPV():
@@ -202,10 +218,7 @@ def calcPV():
     while(zorbKey in moveTable):
         move = moveTable[zorbKey].bestMove
         resStr.append(move)
-        try:
-            board.push_uci(move)    # found the bug, duplicate zorbKeys, work on your zorbKey func
-        except:
-            break
+        board.push_uci(move)    # found the bug, duplicate zorbKeys, work on your zorbKey func
         zorbKey = boardToZorbistKey(board)
         i+=1
     for k in range(i):
@@ -222,7 +235,7 @@ def iGo(inStr):
     global bestMove
     global nodes
     global threadFlag
-    time = 999999                   # default time to search
+    time = 15                   # default time to search
     depth = 2                       # default depth is 2 for now
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
     if 'depth' in inStr:
@@ -236,7 +249,6 @@ def iGo(inStr):
     newVal = 0          # score of the current root move
     moveLen = board.legal_moves.count()
     moveList = [None]*moveLen
-    print(moveList)
 
     # while the stop signal isn't recieved
     while (not threadFlag):
@@ -268,8 +280,9 @@ def iGo(inStr):
 def stopThread():
     global threadFlag
     threadFlag = True
-    global goThread
-    goThread.join()
+    #global goThread
+    #goThread.join(1000)
+
 
 #position evaluation boards for each piece
 pawnTable = [0,  0,  0,  0,  0,  0,  0,  0,
