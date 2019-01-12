@@ -171,6 +171,61 @@ def record_table(depth, val, flag, move):
     key = boardToZorbistKey(board)
     moveTable[key & hashSize] = MyMove(move,depth,val,flag,key)
 
+# gets the smallest attacker on side that can attack square
+def get_smallest_attacker(square, side):
+    global board
+    val = 999
+    result = None
+    attacks = list(board.attackers(side,square))
+    for aSquare in attacks:
+        newVal = board.piece_type_at(aSquare)
+        if newVal < val:
+            val = newVal
+            result = aSquare
+    return result   # returns square of attacker
+
+#Static Exchange Evaluation - essentially, is this a good capture
+def see(square,side):
+    global board
+    val = 0
+    attackerSquare = get_smallest_attacker(square,side)
+    if attackerSquare is not None:
+        board.push(chess.Move(attackerSquare, square))  # don't know if it drops piece at square for me
+        val = max(0, board.piece_type_at(square) - see(square,not side))
+        board.pop()
+    return val
+
+def order_captures(captures):
+    global board
+    captureEvals = []
+    for cap in captures:
+        captureEvals.append((see(cap.to_square,board.turn),cap))
+    return captureEvals.sort(key=itemgetter(0),reverse=True)
+
+def is_capture(move):
+    return True if move.drop is not None else False
+def quiescent_search(alpha, beta):
+    global board
+    if board.is_check():
+        nega_max(1,1,alpha,beta,'')
+    val = evalFunction(board)
+    if val >= beta:     # beta cutoff, the score we processed is better then the sub tree's lowest score
+        return beta
+    if val > alpha:
+        alpha = val
+    moveCaptures = order_captures(list(filter(is_capture,board.legal_moves)))   # order the captures using SEE so we don't
+    # have a quiescent search explosion
+    if moveCaptures is None: return alpha
+    for move in moveCaptures:
+        board.push(move)
+        val = -quiescent_search(-beta,-alpha)
+        board.pop()
+        if val >= beta:     # beta cutoff, the score we processed is better then the sub tree's lowest score
+            return beta
+        if val > alpha:
+            alpha = val
+    return alpha
+
 def nega_max(maxDepth, depth, alpha, beta, pv):
     global nodes
     global board
@@ -182,7 +237,10 @@ def nega_max(maxDepth, depth, alpha, beta, pv):
     val = probe_table(maxDepth - depth, alpha, beta)
     if val is not None: return val
     if depth >= maxDepth or threadFlag:
-        val = evalFunction(board)
+        if not board.is_check:
+            val = quiescent_search(alpha, beta)
+        else:
+            val = evalFunction(board)
         record_table(depth, val, EvalFlag.EXACT, '')
         return val
     
