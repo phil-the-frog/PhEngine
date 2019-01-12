@@ -11,6 +11,13 @@ import random
 import threading
 from datetime import datetime
 from operator import itemgetter
+from operator import attrgetter
+import traceback
+from enum import Enum
+import cProfile
+
+p = cProfile.Profile()
+p.enable()
 
 board = chess.Board()       # internal state of the board
 author = 'Phillip Sopt'
@@ -19,6 +26,7 @@ goThread = None             # the thread on which the 'go' command will run
 moveTable = dict()          # a hash table to store the moves for each square to avoid recalculating the moves
 threadFlag = False          # a flag to tell the thread when to stop running
 bestMove = ''               # the current best move found, stored in uci format
+hashSize = 0xFFFF           # how much to max off the zorbist key and reduce our transposition tables size
 
 zorbistSqaures = [None]*64    # 64 dicts, each square will have a dict where the keys are the pieces and the values are the random gen vals
 zorbistIsBlack = None         # one number if it's blacks turn
@@ -41,17 +49,26 @@ def main():
         elif uciIn.startswith('position'):
             iPosition(uciIn[9:])        # 9 to skip the 'position'
         elif uciIn.startswith('go'):
-            iGo(uciIn[3:])
-            #goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn,))   # set up the go thread and let it run
-            #goThread.start()
+            #iGo(uciIn[3:])
+            goThread = threading.Thread(target=iGo,name='Thread-1',args=(uciIn[3:],))   # set up the go thread and let it run
+            goThread.start()
         elif uciIn == 'stop':
             stopThread()
         elif uciIn == 'quit':
             stopThread()
+            p.disable()
+            p.print_stats(sort='time')
             exit()
         elif uciIn == 'print':
             iPrint()
         
+# stop the go thread
+def stopThread():
+    global threadFlag
+    threadFlag = True
+    global goThread
+    goThread.join(1000)
+
 # prints the author and name of the engine to the GUI
 def iUci():
     print('id name {}'.format(engineName))
@@ -106,80 +123,82 @@ def iPosition(inStr):
     elif inStr.startswith('fen'):
         board.set_fen(inStr.partition('fen ')[2])   # use the fen string at the end to build a new board
     
-# this is the structure that we are going to use to store our past moves in the moveTable
-class OldMove:
+# enum used for evaluation flags
+class EvalFlag(Enum):
+    EXACT = 0
+    ALPHA = 1
+    BETA = 2
+# this is the structure that we are going to use to store our past moves in the moveTable transposition table
+class MyMove:
+    zorbKey = 0     # the key used
     bestMove = ''   # uci of the move
     depth = 0       # how deep did we find it
     evalu = 0       # what was it's evaluation
+    flag = 0
 
-    def __init__(self, bestMove, depth, evalu): # constructor
+    def __init__(self, bestMove, depth, evalu, flag, zorbKey): # constructor
         self.bestMove = bestMove
         self.depth = depth
         self.evalu = evalu
+        self.flag = flag
+        self.zorbKey = zorbKey
 
-time = 0
-startTime = 0
+    def __lt__(self,other):
+        return self.evalu < other.evalu
+    def __eq__(self,other):
+        return self.evalu == other.evalu
+
 nodes = 0
-def maxi(maxDepth, depth, alpha, beta):
-    global moveTable
-    global board
-    global startTime
-    global threadFlag
-    global nodes
-    global time
-    timePast = (datetime.now()-startTime).seconds   # the time that past in sec
-    if timePast > time: threadFlag = True           # if we are overtime, set flag to exit
-    if depth >= maxDepth or threadFlag: return evalFunction(board)
-    for move in board.legal_moves:          # now go through all our moves
-        nodes += 1
-        board.push(move)                    # update the board with that move
-        zorbKey = boardToZorbistKey(board)
-        try:
-            with moveTable[zorbKey] as oldResults:
-                score = oldResults.evalu if oldResults.eval >= depth and oldResults.evalu >= alpha else mini(maxDepth, depth+1, alpha, beta)
-        except:
-            score = mini(maxDepth, depth+1, alpha, beta)
+hashHits = 0
 
-        # if you havent seen it before then add it to the table
+def probe_table(depth, alpha, beta):
+    key = boardToZorbistKey(board)
+    if (key & hashSize) not in moveTable: return None
+
+    move = moveTable[key & hashSize]
+    if move.zorbKey != key: return None
+    global hashHits
+    hashHits += 1
+    
+    if move.depth >= depth:
+        if move.flag == EvalFlag.EXACT: return move.evalu
+        if move.flag == EvalFlag.ALPHA and move.evalu <= alpha: return alpha
+        if move.flag == EvalFlag.BETA and move.evalu >= beta: return beta
+    return None
+
+def record_table(depth, val, flag, move):
+    global moveTable
+    key = boardToZorbistKey(board)
+    moveTable[key & hashSize] = MyMove(move,depth,val,flag,key)
+
+def nega_max(maxDepth, depth, alpha, beta, pv):
+    global nodes
+    global board
+    global threadFlag
+    bestMove = ''
+    nodes += 1
+    print('info nodes {} pv {}'.format(nodes, pv))
+    hashFlag = EvalFlag.ALPHA
+    val = probe_table(maxDepth - depth, alpha, beta)
+    if val is not None: return val
+    if depth >= maxDepth or threadFlag:
+        val = evalFunction(board)
+        record_table(depth, val, EvalFlag.EXACT, '')
+        return val
+    
+    for move in board.legal_moves:
+        board.push(move)
+        val = nega_max(maxDepth, depth+1, -beta, -alpha, pv+' '+move.uci()) * -1
         board.pop()
-        if score >= beta:       # beta cutoff, the score we processed is better then the sub tree's lowest score
-                                # (recall beta was set to 9999999 at the start)
-            return beta         # so bail, this tree is a lost cause
-        if score > alpha:       # here the score is better then the best score in this tree
-            alpha = score       # so update the bestMove
-            moveTable[zorbKey] = OldMove(move.uci(), depth, score)  # update the moveTable too
-    print('info time {} nodes {} depth {} score cp {}'.format(datetime.now() - startTime,nodes,depth,alpha))
+        if val >= beta:     # beta cutoff, the score we processed is better then the sub tree's lowest score
+            record_table(depth, beta, EvalFlag.BETA, move.uci())
+            return beta
+        if val > alpha:
+            hashFlag = EvalFlag.EXACT
+            bestMove = move.uci()
+            alpha = val
+    record_table(depth,alpha,hashFlag, bestMove)
     return alpha
-
-def mini(maxDepth, depth, alpha, beta):
-    global moveTable
-    global board
-    global startTime
-    global threadFlag
-    global nodes
-    global time
-    timePast = (datetime.now()-startTime).seconds   # the time that past in sec
-    if timePast > time: threadFlag = True           # if we are overtime, set flag to exit
-    if depth >= maxDepth or threadFlag: return -evalFunction(board)
-    for move in board.legal_moves:          # now go through all our moves
-        nodes += 1
-        board.push(move)                    # update the board with that move
-        zorbKey = boardToZorbistKey(board)
-        try:
-            with moveTable[zorbKey] as oldResults:
-                score = oldResults.evalu if oldResults.eval >= depth and oldResults.evalu <= beta else maxi(maxDepth, depth+1, alpha, beta)
-        except:
-            score = maxi(maxDepth, depth+1, alpha, beta)
-
-        # if you havent seen it before then add it to the table
-        board.pop()
-        if score <= alpha:      # alpha cutoff, the score we got is REALLY GOOD, we want the opponent to lose remember?
-            return alpha        # (recall alpha was set to -999999 at the start)
-        if score < beta:        # we got a worse score, great use it instead
-            beta = score
-            moveTable[zorbKey] = OldMove(move.uci(), depth, score)
-    print('info time {} nodes {} depth {} score cp {}'.format(datetime.now() - startTime,nodes,depth,beta))
-    return beta
 
 def boardToZorbistKey(mBoard):
     global zorbistSqaures 
@@ -216,7 +235,7 @@ def calcPV():
     resStr = []
     zorbKey = boardToZorbistKey(board)
     while(zorbKey in moveTable):
-        move = moveTable[zorbKey].bestMove
+        move = moveTable[zorbKey & hashSize].bestMove
         resStr.append(move)
         board.push_uci(move)    # found the bug, duplicate zorbKeys, work on your zorbKey func
         zorbKey = boardToZorbistKey(board)
@@ -224,64 +243,66 @@ def calcPV():
     for k in range(i):
         board.pop()
     return ' '.join(resStr)
+# this will run in another thread and will stop the go function if time is set
+def timer(maxTime,startTime):
+    while(maxTime > (datetime.now()-startTime).seconds):
+        continue
+    stopThread()
 
-        
 # inStr is the parameters that the gui sends to go like 'movetime' 'depth' ...
 def iGo(inStr):
+    global hashHits
     global moveTable
     global board
-    global startTime
-    global time                     # used to limit the search, not passed into the max/min func
     global bestMove
     global nodes
     global threadFlag
-    time = 15                   # default time to search
-    depth = 2                       # default depth is 2 for now
+    hashHits = 0
+    time = 15                       # default time to search in seconds
+    depth = 1                       # default starting depth is 1 for now
     inStr = inStr.split(' ')        # get the depth if the gui passed it in
     if 'depth' in inStr:
         depth = int(inStr[inStr.index('depth')+1])
     if 'movetime' in inStr:         # get the movetime if the gui passed it in
         time = int(inStr[inStr.index('movetime')+1]) / 1000
     startTime = datetime.now()  # set the startTime here, then the min and max function can display time passed
+    timeThread = threading.Thread(target=timer,args=(time,startTime))   # start the timer thread
+    timeThread.start()
 
     nodes = 0           # nodes processed throught the search
-    val = -999999       # the max score for a root move
-    newVal = 0          # score of the current root move
-    moveLen = board.legal_moves.count()
-    moveList = [None]*moveLen
+    moveList = []
+    for move in board.legal_moves:
+        moveList.append(MyMove(move.uci(),0,0,0,0))
+
+    # probe the table and save the order the move list
+    for move in moveList:
+        board.push_uci(move.bestMove)
+        newVal = probe_table(0, -99999, 99999)
+        board.pop()
+        if newVal is not None:
+            move.evalu = newVal
+    moveList.sort(reverse=True)
 
     # while the stop signal isn't recieved
     while (not threadFlag):
-        i = 0
         # do iterative deepening on the root moves to fill up the movesTable
-        for move in board.legal_moves:
-            if threadFlag: break
-            board.push(move)
-            zorbKey = boardToZorbistKey(board)
-            try:
-                with moveTable[zorbKey] as oldResults:  # if the moves has been seen before then use that old eval to help you
-                    #if the oldResults are deep enought
-                    newVal = oldResults.evalu if oldResults.eval >= depth else mini(depth, 1, -99999, 99999)
-            except:
-                newVal = mini(depth, 1, -99999, 99999)
+        for move in moveList:
+            board.push_uci(move.bestMove)
+            newVal = nega_max(depth, 1, -99999, 99999, move.bestMove) * -1
             board.pop()
-            moveList[i] = (move.uci(),0+newVal)
-            i += 1
-        pair = max(moveList,key=itemgetter(1))
-        bestMove = pair[0]
+            move.evalu = newVal
+            if threadFlag : 
+                moveList.sort(reverse=True)
+                break
         depth += 1
-    moveTable[boardToZorbistKey(board)] = OldMove(bestMove,depth,pair[1]-1)  # update the moveTable
-    print('info nodes {} depth {} pv {}'.format(nodes, depth, calcPV()))
+        moveList.sort(reverse=True)
+        print('info depth {}'.format(depth))
+    print('info depth {}'.format(depth))
     threadFlag = False
     print('info time {}'.format(datetime.now()-startTime))  # print the time it took
-    print ('bestmove {}'.format(bestMove))      # finally print out the best move
-        
-# stop the go thread
-def stopThread():
-    global threadFlag
-    threadFlag = True
-    #global goThread
-    #goThread.join(1000)
+    print('info hashHits {}'.format(hashHits))
+    print ('bestmove {}'.format(moveList[0].bestMove))      # finally print out the best move
+
 
 
 #position evaluation boards for each piece
@@ -351,16 +372,7 @@ kingEndGameTable = [-50,-40,-30,-20,-20,-30,-40,-50,
 # evals will be positive if white is winning and negative if black is winning
 def evalFunction(mBoard):
     color = mBoard.turn
-    ''' OLD SLOW CODE
-    # material evaluation, might be really slow try to optimize
-    scoreForKings = 20000 * (mBoard.pieces(chess.KING,color).__len__() - mBoard.pieces(chess.KING,not color).__len__())
-    scoreForQueens = 900* (mBoard.pieces(chess.QUEEN,color).__len__() - mBoard.pieces(chess.QUEEN,not color).__len__())
-    scoreForRook = 500 * (mBoard.pieces(chess.ROOK,color).__len__() - mBoard.pieces(chess.ROOK,not color).__len__())
-    scoreForBishopKnight = (mBoard.pieces(chess.BISHOP,color).__len__()-mBoard.pieces(chess.BISHOP,not color).__len__())
-    scoreForBishopKnight += (mBoard.pieces(chess.KNIGHT,color).__len__()-mBoard.pieces(chess.KNIGHT,not color).__len__())
-    scoreForBishopKnight *= 330
-    scoreForPawn = 100 * (mBoard.pieces(chess.PAWN,color).__len__() - mBoard.pieces(chess.PAWN,not color).__len__())
-    '''
+   
     scoreForKings = 0
     scoreForQueens = 0
     scoreForRook = 0
@@ -412,15 +424,16 @@ def evalFunction(mBoard):
             elif piece.piece_type == chess.KING:
                 scoreForKings -= kingTable[square]
                 scoreForKings -= 20000
-    '''
+    ''' 
     # Mobility evaluation, This might be slow too
     scoreMobility = mBoard.legal_moves.count()  # my num of legal moves
     mBoard.push(chess.Move.null())              # push a null move to change to the other side
     scoreMobility -= mBoard.legal_moves.count() # -opponents num of legal moves
     scoreMobility *= 0.1
     mBoard.pop()    # pop the null move
-    return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn + scoreMobility
+    return scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn + scoreMobility * (1 if color else -1)
     '''
+    
     return (scoreForKings + scoreForQueens + scoreForRook + scoreForBishopKnight + scoreForPawn) * (1 if color else -1)
 
 def iPrint():
